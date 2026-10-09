@@ -1,0 +1,76 @@
+spring:
+  application:
+    name: docmind
+  profiles:
+    active: ${SPRING_PROFILES_ACTIVE:dev}
+  # No spring.datasource.url on purpose: providers below define their own
+  # qualified DataSources only when enabled. Exclude Boot's default pool.
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+  # Dev services are opt-in per profile: spring-boot-docker-compose only
+  # runs when the active profile enables it (dev) AND docker exists.
+  docker:
+    compose:
+      enabled: false
+
+app:
+  name: docmind
+  version: 0.0.1-SNAPSHOT
+  description: AI document-mind backend (Spring AI + pgvector)
+  providers:
+    mysql:
+      enabled: false
+      url: jdbc:mysql://localhost:3306/docmind?useSSL=false&allowPublicKeyRetrieval=true
+      username: docmind
+      password: docmind
+      driver-class-name: com.mysql.cj.jdbc.Driver
+      maximum-pool-size: 10
+      minimum-idle: 2
+    pg:
+      enabled: false
+      url: jdbc:postgresql://localhost:5432/docmind
+      username: docmind
+      password: docmind
+      driver-class-name: org.postgresql.Driver
+      maximum-pool-size: 15
+      minimum-idle: 2
+      vector:
+        table-name: vector_store
+        dimensions: 1536
+        initialize-schema: true
+    mongo:
+      enabled: false
+      connection-string: mongodb://localhost:27017/docmind
+      database: docmind
+    cassandra:
+      enabled: false
+      contact-points:
+        - 127.0.0.1
+      port: 9042
+      datacenter: datacenter1
+
+server:
+  port: 8080
+  error:
+    include-message: never
+    include-binding-errors: never
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when-authorized
+
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+logging:
+  level:
+    com.ai.docmind: INFO

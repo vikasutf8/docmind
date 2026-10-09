@@ -1,0 +1,27 @@
+# Local development. Relaxed, docs on, dev services via Compose.
+spring:
+  docker:
+    compose:
+      enabled: true # requires docker; set false (or SPRING_DOCKER_COMPOSE_ENABLED=false) if absent
+
+app:
+  providers:
+    pg:
+      enabled: ${APP_PG_ENABLED:false}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+springdoc:
+  show-actuator: true
+
+logging:
+  level:
+    com.ai.docmind: DEBUG
+    org.springframework.ai: INFO

@@ -1,0 +1,22 @@
+# Production. Strict, docs off, no dev services.
+spring:
+  docker:
+    compose:
+      enabled: false
+
+springdoc:
+  api-docs:
+    enabled: false
+  swagger-ui:
+    enabled: false
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+logging:
+  level:
+    root: WARN
+    com.ai.docmind: INFO

@@ -1,0 +1,84 @@
+# docmind local infra. Start what you need:
+#   docker compose up -d postgres mysql
+# Boot dev services (spring-boot-docker-compose) reuse this file.
+name: docmind
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: docmind-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-docmind}
+      POSTGRES_USER: ${POSTGRES_USER:-docmind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-docmind}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-docmind} -d $${POSTGRES_DB:-docmind}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [docmind]
+
+  mysql:
+    image: mysql:8.4
+    container_name: docmind-mysql
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-docmind}
+      MYSQL_USER: ${MYSQL_USER:-docmind}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-docmind}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+    ports:
+      - "${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [docmind]
+
+  mongo:
+    image: mongo:8.0
+    container_name: docmind-mongo
+    environment:
+      MONGO_INITDB_DATABASE: ${MONGO_DATABASE:-docmind}
+    ports:
+      - "${MONGO_PORT:-27017}:27017"
+    volumes:
+      - mongodata:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [docmind]
+
+  cassandra:
+    image: cassandra:5.0
+    container_name: docmind-cassandra
+    ports:
+      - "${CASSANDRA_PORT:-9042}:9042"
+    volumes:
+      - cassandradata:/var/lib/cassandra
+    healthcheck:
+      test: ["CMD-SHELL", "nodetool status | grep -q UN"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks: [docmind]
+
+networks:
+  docmind:
+    driver: bridge
+
+volumes:
+  pgdata:
+  mysqldata:
+  mongodata:
+  cassandradata:
