@@ -73,3 +73,13 @@ controller throws ResourceNotFoundException
 ## 2026-10-09 append — postgres bootstrap
 - `docker/postgres/init.sql` (vector, uuid-ossp, hstore) runs once on first
   postgres start via `/docker-entrypoint-initdb.d` mount in `compose.yaml`.
+
+## 2026-10-09 append — AI config placement
+- `spring.ai.openai.*` / `spring.ai.vectorstore.pgvector.*` live in base
+  `application.yaml` with env overrides; secrets never committed.
+  Never put provider/AI keys under `logging.level` (broke context once).
+
+## 2026-10-09 append — RAG tuning
+- `config/RagProperties` (`app.rag.*`): chunk-size / chunk-overlap /
+  top-k / similarity-threshold. Pure values, always bound, validated in
+  the record's compact constructor. Retrieval pipeline (Phase 1) consumes it.

@@ -37,3 +37,12 @@ with zero DBs before anything is built on top of it.
 ## 2026-10-09 append — Phase 0 extra done
 - `docker/postgres/init.sql` + compose mount added (pgvector prerequisites).
 - Rule going forward: every change is APPENDED to these md files, never rewritten.
+
+## 2026-10-09 append — OpenAI yaml in place
+- `spring.ai.openai.*` + `spring.ai.vectorstore.pgvector.*` added to base yaml
+  (dormant until Phase 1 starter). Phase 1 must verify enum binding for
+  `distance-type` and add the pgvector starter + embedding model.
+
+## 2026-10-09 append — RAG knobs in place
+- `app.rag.*` + `RagProperties` done. Phase 1 chunking/retrieval will read
+  these (no hardcoded sizes).

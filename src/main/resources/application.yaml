@@ -13,11 +13,36 @@ spring:
   docker:
     compose:
       enabled: false
+  # Spring AI (dormant until Phase 1 starter). Empty secret defaults so the
+  # app boots without env vars; set real values via environment, not git.
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:}
+      organization: ${OPENAI_ORGANIZATION:}
+      base-url: ${OPENAI_BASE_URL:}
+      chat:
+        options:
+          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+          temperature: ${OPENAI_CHAT_TEMPERATURE:1.0}
+      embedding:
+        options:
+          model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-large}
+          dimensions: ${OPENAI_EMBEDDING_DIMENSIONS:3072}
+    vectorstore:
+      pgvector:
+        index-type: ${VECTORSTORE_PGVECTOR_INDEX_TYPE:ivfflat}
+        distance-type: ${VECTORSTORE_PGVECTOR_DISTANCE_TYPE:cosine}
+
 
 app:
   name: docmind
   version: 0.0.1-SNAPSHOT
   description: AI document-mind backend (Spring AI + pgvector)
+  rag:
+    chunk-size: ${RAG_CHUNK_SIZE:500}
+    chunk-overlap: ${RAG_CHUNK_OVERLAP:100}
+    top-k: ${RAG_TOP_K:5}
+    similarity-threshold: ${RAG_SIMILARITY_THRESHOLD:0.7}
   providers:
     mysql:
       enabled: false

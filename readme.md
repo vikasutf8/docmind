@@ -71,3 +71,14 @@ See `arch.md` for the package layout and `plan.md` for the phases.
 - `docker/postgres/init.sql` creates `vector`, `uuid-ossp`, `hstore`
   extensions (`IF NOT EXISTS`); auto-mounted into postgres via compose.
 - If the `pgdata` volume already exists, recreate it or the script is skipped.
+
+## 2026-10-09 append — OpenAI env vars
+- `OPENAI_API_KEY` (required for Phase 1), optional `OPENAI_ORGANIZATION`,
+  `OPENAI_BASE_URL`, `OPENAI_CHAT_MODEL`, `OPENAI_CHAT_TEMPERATURE`,
+  `OPENAI_EMBEDDING_MODEL`, `OPENAI_EMBEDDING_DIMENSIONS`,
+  `VECTORSTORE_PGVECTOR_INDEX_TYPE`, `VECTORSTORE_PGVECTOR_DISTANCE_TYPE`.
+  App boots with all unset (AI dormant until Phase 1).
+
+## 2026-10-09 append — RAG env vars
+- `RAG_CHUNK_SIZE` (500), `RAG_CHUNK_OVERLAP` (100), `RAG_TOP_K` (5),
+  `RAG_SIMILARITY_THRESHOLD` (0.7).

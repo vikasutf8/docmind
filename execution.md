@@ -56,3 +56,27 @@ SPRING_PROFILES_ACTIVE=prod ./mvnw spring-boot:run
   `./docker/postgres:/docker-entrypoint-initdb.d:ro`.
 - Proof: `./mvnw test` — 5/5 green, BUILD SUCCESS (no boot, code-only check).
 - Note: existing `pgdata` volume must be recreated for the script to run.
+
+## 2026-10-09 — OpenAI + pgvector yaml
+- Added `spring.ai.openai.*` (api-key/org/base-url, chat options
+  model `gpt-4o-mini` + temperature, embedding `text-embedding-3-large` /
+  3072 dims) and `spring.ai.vectorstore.pgvector.*`
+  (ivfflat / cosine) to `application.yaml`. Secrets default empty so boot
+  never fails on missing env.
+- Normalizations vs raw snippet: nested under `spring.ai` (where Spring AI
+  binds), `modal` typo fixed to `model`, chat/embedding moved under
+  `options:` (Spring AI layout), env defaults added.
+- Found + fixed: raw snippet had been pasted under `logging.level`, breaking
+  context (`LogLevel.${OPENAI_API_KEY}`) — removed the duplicate.
+- Open for Phase 1: verify `distance-type: cosine` binds Spring AI 2.x enum
+  (`COSINE_DISTANCE`?) once the pgvector starter lands.
+- Proof: `./mvnw test` — 5/5 green, BUILD SUCCESS.
+
+## 2026-10-09 — RAG knobs
+- `app.rag.*` in `application.yaml`: chunk-size 500, chunk-overlap 100,
+  top-k 5, similarity-threshold 0.7 — all env-overridable
+  (`RAG_CHUNK_SIZE`, `RAG_CHUNK_OVERLAP`, `RAG_TOP_K`,
+  `RAG_SIMILARITY_THRESHOLD`).
+- New `config/RagProperties` record with range validation
+  (overlap < size, threshold in [0,1]) + `RagPropertiesTest`.
+- Proof: `./mvnw test` — 7/7 green, BUILD SUCCESS.
