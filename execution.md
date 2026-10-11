@@ -80,3 +80,32 @@ SPRING_PROFILES_ACTIVE=prod ./mvnw spring-boot:run
 - New `config/RagProperties` record with range validation
   (overlap < size, threshold in [0,1]) + `RagPropertiesTest`.
 - Proof: `./mvnw test` — 7/7 green, BUILD SUCCESS.
+
+## 2026-10-11 — docManagement + shared skeleton
+- Created 9 files (verified by compile, not guessing):
+  `shared/entity/Document.java` (record, `newDocument`/`withContent`
+  factories, compact-constructor guards); `docManagement/dtos/`
+  (`CreateDocumentRequest`, `UpdateDocumentRequest` with jakarta
+  validation, `DocumentResponse.from` mapper);
+  `docManagement/repository/` (`DocumentRepository` iface +
+  `InMemoryDocumentRepository` @Repository/ConcurrentHashMap);
+  `docManagement/service/DocumentService` iface;
+  `docManagement/serviceImpl/DocumentServiceImpl` @Service reusing
+  `ResourceNotFoundException` -> 404; `docManagement/controller/
+  DocumentController` @ `/api/v1/documents` (POST 201 + Location,
+  GET list, GET/PUT by id, DELETE 204) with springdoc @Tag/@Operation.
+- No `pom.xml` change (plain record entity, no JPA/Mongo starter).
+- Proof: `./mvnw -q compile` clean (Lombok Unsafe warnings only);
+  `./mvnw test` — 7/7 green (1 app ctx + 2 RagProperties +
+  4 GlobalExceptionHandler), BUILD SUCCESS. Context loads with new
+  controller/service/repository beans and zero DBs.
+
+## 2026-10-11 — chat package (dummy controller only)
+- Created 5 sub-packages under `com.ai.docmind.chat/` (`controller/`,
+  `service/`, `serviceImpl/`, `repository/`, `dtos/`); only 1 class:
+  `controller/ChatController.java` — dummy `POST /api/v1/chat` echoing
+  `{"message"}` -> `{"reply":"echo: ..."}`. Blank message ->
+  `BadRequestException` -> 400 via existing handler.
+- Other four packages left empty on purpose (reserved for Phase 1 RAG).
+- Proof: `./mvnw test` — 7/7 green, BUILD SUCCESS (context loads with
+  new ChatController bean, zero DBs).

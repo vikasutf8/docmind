@@ -82,3 +82,21 @@ See `arch.md` for the package layout and `plan.md` for the phases.
 ## 2026-10-09 append — RAG env vars
 - `RAG_CHUNK_SIZE` (500), `RAG_CHUNK_OVERLAP` (100), `RAG_TOP_K` (5),
   `RAG_SIMILARITY_THRESHOLD` (0.7).
+
+## 2026-10-11 append — document management API (in-memory)
+- CRUD at `/api/v1/documents`: `POST` (201 + Location), `GET /`,
+  `GET /{id}`, `PUT /{id}`, `DELETE /{id}` (204). Validation errors ->
+  400, unknown id -> 404 (ProblemDetail), all visible in Swagger UI.
+- Packages: `com.ai.docmind.docManagement.{controller,service,
+  serviceImpl,repository,dtos}` + shared entity
+  `com.ai.docmind.shared.entity.Document`. Store is in-memory for now —
+  data resets on restart; JPA/Mongo backing lands later without
+  changing the API.
+- Try it:
+```bash
+./mvnw spring-boot:run
+curl -X POST localhost:8080/api/v1/documents \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"hello","content":"world"}'
+curl localhost:8080/api/v1/documents
+```

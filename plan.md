@@ -46,3 +46,27 @@ with zero DBs before anything is built on top of it.
 ## 2026-10-09 append — RAG knobs in place
 - `app.rag.*` + `RagProperties` done. Phase 1 chunking/retrieval will read
   these (no hardcoded sizes).
+
+## 2026-10-11 append — docManagement + shared skeleton (Phase 2 start)
+- New root packages (user-confirmed): `com.ai.docmind.docManagement.*`
+  (`controller/`, `service/`, `serviceImpl/`, `repository/`, `dtos/`) and
+  `com.ai.docmind.shared.entity/` holding `Document`.
+- Naming kept exactly as requested: `docManagement` (capital M) + sibling
+  `service` / `serviceImpl` (not `service.impl`).
+- `Document` is a plain immutable carrier (record, no JPA/Mongo starter yet)
+  so no new `pom.xml` dependency; fields: id/title/content/contentType/
+  sizeBytes/createdAt/updatedAt.
+- Scope: CRUD skeleton — `DocumentController` + `DocumentService` iface +
+  `DocumentServiceImpl` + `DocumentRepository` iface +
+  `InMemoryDocumentRepository` + `Create/Update/Response` DTOs with
+  jakarta validation. In-memory store keeps `./mvnw test` green with zero DBs.
+- Docs order for this change: plan.md -> arch.md -> code -> execution.md ->
+  readme.md (append-only, never rewrite).
+
+## 2026-10-11 append — chat package (dummy controller only)
+- New root package `com.ai.docmind.chat.*` with same five sub-packages as
+  docManagement (`controller/`, `service/`, `serviceImpl/`, `repository/`,
+  `dtos/`), but only `controller/ChatController.java` gets a class for now.
+- `ChatController` is a simple dummy: `POST /api/v1/chat` echoing the
+  message back, no service/repository/DTO wiring yet. RAG + Spring AI
+  wiring lands later (Phase 1).

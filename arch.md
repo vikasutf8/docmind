@@ -83,3 +83,53 @@ controller throws ResourceNotFoundException
 - `config/RagProperties` (`app.rag.*`): chunk-size / chunk-overlap /
   top-k / similarity-threshold. Pure values, always bound, validated in
   the record's compact constructor. Retrieval pipeline (Phase 1) consumes it.
+
+## 2026-10-11 append — docManagement + shared
+- New packages (`com.ai.docmind`):
+```text
+docManagement/
+  controller/      DocumentController.java  @RestController /api/v1/documents
+  service/         DocumentService.java     interface (no Spring imports)
+  serviceImpl/     DocumentServiceImpl.java @Service, maps DTO<->entity
+  repository/      DocumentRepository.java  plain interface (no Spring Data)
+                   InMemoryDocumentRepository.java @Repository, ConcurrentHashMap
+  dtos/            CreateDocumentRequest / UpdateDocumentRequest / DocumentResponse
+                   records + jakarta.validation, Response.from(Document) mapper
+shared/
+  entity/
+    Document.java  immutable record: UUID id, title, content, contentType,
+                   sizeBytes, createdAt, updatedAt; factory newDocument();
+                   compact-constructor validation
+```
+- Request flow (happy path):
+```text
+POST /api/v1/documents {title, content} -> validation
+  -> DocumentService.create -> repository.save -> 201 DocumentResponse
+GET /api/v1/documents -> 200 List<DocumentResponse>
+GET /api/v1/documents/{id} -> 200 or 404 ResourceNotFoundException
+PUT /api/v1/documents/{id} -> 200 or 404
+DELETE /api/v1/documents/{id} -> 204 or 404
+```
+- Decisions: repository is interface-first so JPA/Mongo can replace the
+  in-memory impl later without touching service/controller; errors reuse
+  `ResourceNotFoundException`/`BadRequestException` -> existing
+  `GlobalExceptionHandler` (RFC 9457 ProblemDetail).
+
+## 2026-10-11 append — chat (dummy)
+- Packages (`com.ai.docmind`):
+```text
+chat/
+  controller/      ChatController.java  dummy @RestController /api/v1/chat
+  service/         (empty — reserved for ChatService later)
+  serviceImpl/     (empty — reserved for RAG impl later)
+  repository/      (empty — reserved for conversation history later)
+  dtos/            (empty — reserved for ChatRequest/ChatResponse records)
+```
+- Dummy flow:
+```text
+POST /api/v1/chat {"message":"hi"} -> 200 {"reply":"echo: hi"} (no AI call)
+```
+- Decisions: controller takes a `Map<String,String>` body + manual blank
+  check (no DTO yet on purpose); RAG (`RagProperties`, pgvector
+  VectorStore) will be injected at the service layer later without
+  changing the endpoint path.
