@@ -133,3 +133,33 @@ POST /api/v1/chat {"message":"hi"} -> 200 {"reply":"echo: hi"} (no AI call)
   check (no DTO yet on purpose); RAG (`RagProperties`, pgvector
   VectorStore) will be injected at the service layer later without
   changing the endpoint path.
+
+## 2026-10-11 append — pg document_metadata storage
+- New types:
+```text
+shared/
+  enums/
+    DocumentStatus.java   PENDING | PROCESSING | READY | FAILED (VARCHAR, append-only)
+  entity/
+    Document.java         existing in-memory carrier (unchanged)
+    DocumentMetadata.java @Entity @Table(document_metadata), UUID uuid PK,
+                          filename(512) / contentType(120) / fileSize /
+                          totalPages? / totalChunks? / status / createdAt /
+                          updatedAt / errorMessage(TEXT), newUpload() factory
+config/provider/postgres/
+  PostgresJpaConfig.java  conditional (pg.enabled) pgEntityManagerFactory
+                          + pgTransactionManager on postgresDataSource
+```
+- How a file is stored:
+```text
+upload (pdf now, doc/docx later)
+  -> validate contentType in SUPPORTED_CONTENT_TYPES + size
+  -> INSERT document_metadata (PENDING, pages/chunks null)
+  -> save binary to disk/object storage (outside pg row)
+  -> worker: PROCESSING -> extract pages -> chunk -> embed
+  -> READY (pages/chunks set) | FAILED (errorMessage set, retryable)
+```
+- Decisions: metadata-only row in pg (no bytea — keeps the table small and
+  pgvector-focused); enum as STRING for SQL readability; JPA starter added
+  but auto-config excluded globally so zero-DB boot/tests unaffected;
+  manual pg EMF preserves the no-`@Primary`-DataSource rule.

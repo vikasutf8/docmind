@@ -109,3 +109,16 @@ SPRING_PROFILES_ACTIVE=prod ./mvnw spring-boot:run
 - Other four packages left empty on purpose (reserved for Phase 1 RAG).
 - Proof: `./mvnw test` — 7/7 green, BUILD SUCCESS (context loads with
   new ChatController bean, zero DBs).
+
+## 2026-10-11 — pg document_metadata storage
+- Added `spring-boot-starter-data-jpa` to `pom.xml`; base
+  `application.yaml` excludes `HibernateJpaAutoConfiguration` + sets
+  `spring.jpa.hibernate.ddl-auto: validate` (safe default, no-op with no EMF).
+- Created `shared/enums/DocumentStatus.java`,
+  `shared/entity/DocumentMetadata.java` (@Entity document_metadata,
+  `newUpload()` factory, `@PrePersist/@PreUpdate` timestamps),
+  `config/provider/postgres/PostgresJpaConfig.java` (conditional pg EMF +
+  tx manager, ddl-auto update), plus `DocumentMetadataTest` (3 tests).
+- Proof: `./mvnw test` — 10/10 green (1 app ctx + 2 RagProperties +
+  4 GlobalExceptionHandler + 3 DocumentMetadata), BUILD SUCCESS. App
+  context still loads with pg disabled (no EMF bean, zero DBs).

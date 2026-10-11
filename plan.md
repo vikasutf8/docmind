@@ -70,3 +70,18 @@ with zero DBs before anything is built on top of it.
 - `ChatController` is a simple dummy: `POST /api/v1/chat` echoing the
   message back, no service/repository/DTO wiring yet. RAG + Spring AI
   wiring lands later (Phase 1).
+
+## 2026-10-11 append — pg document_metadata storage
+- New `shared/enums/DocumentStatus` (PENDING -> PROCESSING -> READY, plus
+  FAILED with errorMessage) parallel to `shared/entity/`, and new JPA
+  `@Entity shared/entity/DocumentMetadata` mapped to table
+  `document_metadata`: uuid (PK) / filename / contentType / fileSize /
+  totalPages / totalChunks / status (STRING) / createdAt / updatedAt /
+  errorMessage (TEXT). Metadata row only — binary stays on disk/object
+  storage; pdf accepted now, doc/docx join SUPPORTED_CONTENT_TYPES later.
+- `pom.xml`: added `spring-boot-starter-data-jpa` (Boot-managed). Base
+  yaml excludes `HibernateJpaAutoConfiguration` so boot stays DB-free;
+  new conditional `config/provider/postgres/PostgresJpaConfig`
+  (pg.enabled=true only) builds `pgEntityManagerFactory` +
+  `pgTransactionManager` on the qualified `postgresDataSource`
+  (ddl-auto update, no @Primary — keeps the no-ambiguity rule).

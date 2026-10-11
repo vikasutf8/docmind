@@ -100,3 +100,12 @@ curl -X POST localhost:8080/api/v1/documents \
   -d '{"title":"hello","content":"world"}'
 curl localhost:8080/api/v1/documents
 ```
+
+## 2026-10-11 append — dummy chat API
+- `POST /api/v1/chat` with `{"message":"hi"}` -> `{"reply":"echo: hi"}`.
+  Blank message -> 400. No AI call yet; RAG wiring later keeps same path.
+```bash
+curl -X POST localhost:8080/api/v1/chat \
+  -H 'Content-Type: application/json' \
+  -d '{"message":"hi"}'
+```
