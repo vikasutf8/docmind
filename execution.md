@@ -122,3 +122,33 @@ SPRING_PROFILES_ACTIVE=prod ./mvnw spring-boot:run
 - Proof: `./mvnw test` — 10/10 green (1 app ctx + 2 RagProperties +
   4 GlobalExceptionHandler + 3 DocumentMetadata), BUILD SUCCESS. App
   context still loads with pg disabled (no EMF bean, zero DBs).
+
+## 2026-10-21 — Spring AI starters + DocumentMetadata state machine (planned)
+- [ ] `pom.xml`: declare `spring-ai-starter-model-google-genai`,
+      `spring-ai-starter-vector-store-pgvector`,
+      `spring-ai-pdf-document-reader` (versions from the 2.0.1 BOM).
+- [ ] `DocumentMetadata`: drop raw setters, add `startProcessing()` /
+      `complete(pages, chunks)` / `fail(reason)` with illegal-transition
+      guards, `@DynamicUpdate`, `updatable=false` content columns,
+      `isFailed()`.
+- [ ] Rewrite `DocumentMetadataTest` for the domain API + illegal moves.
+- [ ] Proof via `./mvnw test` only (no server, no Docker).
+
+## 2026-10-21 — DocumentProcessingException (planned)
+- [ ] Add `exception/DocumentProcessingException` + nested `Stage`
+      (`STORAGE`, `EXTRACTION`, `CHUNKING`, `EMBEDDING`, `DELETION`).
+- [ ] Map it in `GlobalExceptionHandler`: content stages -> 422,
+      infrastructure stages -> 500, with `documentId` + `stage` properties.
+- [ ] Keep the cause server-side (logged), never in the HTTP body.
+- [ ] No tests/execution this round (per instruction); code-only change.
+
+## 2026-10-21 — DocumentProcessingException (executed, code-only)
+- Added `exception/DocumentProcessingException` (`UUID documentId` +
+  nested `Stage`, cause retained, null-guarded) and the
+  `@ExceptionHandler` in `GlobalExceptionHandler` with the 422/500 stage
+  split, WARN logging (cause stays server-side) and `documentId`/`stage`
+  ProblemDetail properties.
+- No tests or Maven runs executed per instruction. No pipeline callers
+  exist in the current tree, so this lands the contract + mapping only.
+- Follow-up when the upload pipeline is restored: throw it at the
+  storage/extraction/chunking/embedding/deletion boundaries.

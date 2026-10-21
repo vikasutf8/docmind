@@ -109,3 +109,11 @@ curl -X POST localhost:8080/api/v1/chat \
   -H 'Content-Type: application/json' \
   -d '{"message":"hi"}'
 ```
+
+## 2026-10-21 append — document-processing exception
+- New `DocumentProcessingException` (`documentId` + `stage`) handled by
+  `GlobalExceptionHandler` -> RFC 9457 `ProblemDetail`:
+  `EXTRACTION`/`CHUNKING` -> **422**, `STORAGE`/`EMBEDDING`/`DELETION` ->
+  **500**, with `documentId` + `stage` properties.
+- The cause is logged server-side and never serialized. The upload
+  pipeline will throw it at each stage boundary when rebuilt.

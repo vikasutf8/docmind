@@ -85,3 +85,52 @@ with zero DBs before anything is built on top of it.
   (pg.enabled=true only) builds `pgEntityManagerFactory` +
   `pgTransactionManager` on the qualified `postgresDataSource`
   (ddl-auto update, no @Primary — keeps the no-ambiguity rule).
+
+## 2026-10-21 append — Spring AI starters declared + document_metadata hardening
+- Root cause fixed: the BOM manages versions but puts nothing on the
+  classpath; every `./mvnw` compile of AI-touching code failed. `pom.xml`
+  now declares what `application.yaml` already configures, versions from
+  `spring-ai-bom` 2.0.1:
+  - `spring-ai-starter-model-google-genai` (chat + embedding,
+    `spring.ai.google.genai.*` — dormant without an api-key)
+  - `spring-ai-starter-vector-store-pgvector`
+  - `spring-ai-pdf-document-reader` (`PagePdfDocumentReader`)
+- `DocumentMetadata` modernised for Boot 4.1 / Hibernate 7 / Java 25:
+  setters removed (`setFilename/setStatus/setTotalPages/setTotalChunks/
+  setErrorMessage`); lifecycle goes through the entity itself —
+  `startProcessing()` (PENDING|FAILED -> PROCESSING, FAILED retryable),
+  `complete(pages, chunks)` (PROCESSING -> READY), `fail(reason)`
+  (any pre-READY -> FAILED, truncated to 2000). READY is terminal;
+  illegal moves throw `IllegalStateException` in the entity, so callers
+  cannot corrupt the state machine.
+  - `@DynamicUpdate` (Hibernate) for partial UPDATE statements; content
+    columns become `updatable = false` (identity never changes).
+  - `isFailed()` added beside `isReady()`; timestamps stay JPA-portable
+    (`@PrePersist/@PreUpdate`); client-assigned UUID kept (the id must
+    exist before the binary file is named on disk).
+- Deliberately NOT added: `@Version` optimistic locking — it needs a real
+  migration (`ALTER TABLE document_metadata ADD COLUMN version BIGINT NOT
+  NULL DEFAULT 0`); to be added together with Flyway, not via
+  ddl-auto=update (prod runs `validate`).
+- Tests: `DocumentMetadataTest` moves to the domain API and covers
+  illegal transitions.
+- Note: earlier untracked pipeline files (upload controller, ingestion
+  service, processor, chat DTOs, etc.) are no longer in the working tree;
+  the consumers of this entity return with the pipeline rebuild.
+
+## 2026-10-21 append — DocumentProcessingException in the global advice
+- Add `exception/DocumentProcessingException` with the affected
+  `documentId` and a nested `Stage`:
+  `STORAGE | EXTRACTION | CHUNKING | EMBEDDING | DELETION`.
+- Extend `GlobalExceptionHandler` with an `@ExceptionHandler` for it:
+  - `EXTRACTION` / `CHUNKING` -> 422 `Unprocessable Content`
+    (valid request, unusable source document)
+  - `STORAGE` / `EMBEDDING` / `DELETION` -> 500
+    (server/infrastructure fault)
+  - RFC 9457 body: title `Document processing failed`, properties
+    `documentId` + `stage`; the cause is logged server-side only.
+- No pipeline classes exist in the current tree (the upload/processor
+  files were removed), so this lands the contract + mapping only; the
+  ingestion pipeline will throw it when rebuilt. No `@Data`/`@Setter` on
+  the exception — immutable carrier.
+- Verification: code-only, no tests/execution per instruction.

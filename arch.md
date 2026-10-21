@@ -163,3 +163,48 @@ upload (pdf now, doc/docx later)
   pgvector-focused); enum as STRING for SQL readability; JPA starter added
   but auto-config excluded globally so zero-DB boot/tests unaffected;
   manual pg EMF preserves the no-`@Primary`-DataSource rule.
+
+## 2026-10-21 append — document_metadata as a state machine
+- Table and columns unchanged. Public setters are gone; transitions live
+  in the entity:
+```text
+newUpload()        -> PENDING
+startProcessing()  : PENDING|FAILED -> PROCESSING (clears error + counts)
+complete(p, c)     : PROCESSING -> READY   (enforces p, c >= 0)
+fail(reason)       : PENDING|PROCESSING|FAILED -> FAILED (reason truncated)
+                     READY is terminal — every illegal move throws
+                     IllegalStateException.
+```
+- Annotations: `@DynamicUpdate` (partial row updates); `filename`,
+  `content_type`, `file_size` marked `updatable = false`; timestamps via
+  `@PrePersist/@PreUpdate`; UUID stays client-assigned.
+- `pom.xml` now carries the Spring AI stack its yaml references:
+```text
+spring-ai-starter-model-google-genai    (chat + embedding)
+spring-ai-starter-vector-store-pgvector (vector store)
+spring-ai-pdf-document-reader           (PagePdfDocumentReader)
+```
+  all Boot/BOM-managed at 2.0.1; auto-configs stay dormant while
+  pg/api-key are off, so zero-DB boots and tests are unaffected.
+- Known follow-ups (deliberately out of this step): a qualified
+  `pgJdbcTemplate` so the pgvector auto-config has a pool to bind to once
+  pg is enabled; Flyway migrations (then add `@Version`).
+
+## 2026-10-21 append — document-processing error contract
+```text
+pipeline (future) throws DocumentProcessingException(documentId, stage, cause)
+        |
+        v
+GlobalExceptionHandler.handleDocumentProcessing
+  EXTRACTION/CHUNKING          -> 422 ProblemDetail
+  STORAGE/EMBEDDING/DELETION   -> 500 ProblemDetail
+  body: title + detail + documentId + stage
+```
+- `exception/DocumentProcessingException` extends `RuntimeException`,
+  rejects null `documentId`/`stage`, keeps the cause for logs but never
+  serializes it. Both fields are exposed via accessors.
+- `GlobalExceptionHandler` logs at WARN with the cause, then maps as
+  above using a `switch` over the stage; no stage-specific exception
+  subclasses needed.
+- The pipeline classes that would throw it are not in the current tree;
+  the handler is ready for the upload/ingestion rebuild.

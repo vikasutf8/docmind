@@ -6,40 +6,59 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
-import jakarta.persistence.PrePersist;
-import jakarta.persistence.PreUpdate;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.DynamicUpdate;
+import org.hibernate.annotations.UpdateTimestamp;
 
 /**
  * Postgres-backed metadata for one uploaded file, table
- * {@code document_metadata}. Stores metadata only — the binary lives on
- * disk/object storage (path managed by the service layer, not this row).
+ * {@code document_metadata}. Metadata only — the binary lives on disk or
+ * object storage, never in the row.
+ *
+ * <p>The lifecycle is encapsulated. {@code newUpload()} starts
+ * {@code PENDING}; {@link #startProcessing()} moves to {@code PROCESSING};
+ * the run ends in {@link #complete(int, int)} ({@code READY}, terminal) or
+ * {@link #fail(String)} ({@code FAILED}, retryable). There are no public
+ * setters, so callers cannot produce illegal transitions.
  *
  * <p>Supported today: {@code application/pdf}. {@code .doc}/{@code .docx}
- * are accepted next by extending {@link #SUPPORTED_CONTENT_TYPES} plus a
- * parser — no schema change needed.
+ * join {@link #SUPPORTED_CONTENT_TYPES} with a parser later — no schema
+ * change needed.
  */
 @Entity
 @Table(name = "document_metadata")
+@DynamicUpdate
+@Getter
+@NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class DocumentMetadata {
 
-    /** Content types accepted by the upload path. doc/docx join this set later. */
+    /** Content types accepted by the upload path. */
     public static final Set<String> SUPPORTED_CONTENT_TYPES = Set.of("application/pdf");
 
+    private static final int ERROR_MESSAGE_LIMIT = 2000;
+
+    /**
+     * Client-assigned on purpose: the id must exist before the binary is
+     * written, so the file name and the row stay in sync from the start.
+     */
     @Id
     @Column(name = "uuid", nullable = false, updatable = false)
     private UUID id;
 
-    @Column(name = "filename", nullable = false, length = 512)
+    @Column(name = "filename", nullable = false, length = 512, updatable = false)
     private String filename;
 
-    @Column(name = "content_type", nullable = false, length = 120)
+    @Column(name = "content_type", nullable = false, length = 120, updatable = false)
     private String contentType;
 
-    @Column(name = "file_size", nullable = false)
+    @Column(name = "file_size", nullable = false, updatable = false)
     private long fileSize;
 
     @Column(name = "total_pages")
@@ -52,33 +71,24 @@ public class DocumentMetadata {
     @Column(name = "status", nullable = false, length = 20)
     private DocumentStatus status;
 
+    @CreationTimestamp
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
+    @UpdateTimestamp
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
 
-    /** JPA only. */
-    protected DocumentMetadata() {}
-
     private DocumentMetadata(
-            UUID id,
-            String filename,
-            String contentType,
-            long fileSize,
-            DocumentStatus status,
-            Instant createdAt,
-            Instant updatedAt) {
+            UUID id, String filename, String contentType, long fileSize, DocumentStatus status) {
         this.id = id;
         this.filename = filename;
         this.contentType = contentType;
         this.fileSize = fileSize;
         this.status = status;
-        this.createdAt = createdAt;
-        this.updatedAt = updatedAt;
     }
 
     /**
@@ -96,91 +106,54 @@ public class DocumentMetadata {
         if (fileSize < 0) {
             throw new IllegalArgumentException("fileSize must be >= 0");
         }
-        Instant now = Instant.now();
         return new DocumentMetadata(
-                UUID.randomUUID(), filename, contentType, fileSize, DocumentStatus.PENDING, now, now);
+                UUID.randomUUID(), filename.strip(), contentType, fileSize, DocumentStatus.PENDING);
     }
 
-    @PrePersist
-    void onCreate() {
-        if (id == null) {
-            id = UUID.randomUUID();
+    /**
+     * PENDING or FAILED -> PROCESSING (FAILED rows are retryable by design).
+     * Clears the previous failure reason and any partial counts.
+     */
+    public void startProcessing() {
+        if (status == DocumentStatus.PROCESSING || status == DocumentStatus.READY) {
+            throw new IllegalStateException("cannot start processing from status " + status);
         }
-        if (createdAt == null) {
-            createdAt = Instant.now();
-        }
-        updatedAt = createdAt;
-        if (status == null) {
-            status = DocumentStatus.PENDING;
-        }
+        status = DocumentStatus.PROCESSING;
+        totalPages = null;
+        totalChunks = null;
+        errorMessage = null;
     }
 
-    @PreUpdate
-    void onUpdate() {
-        updatedAt = Instant.now();
+    /** PROCESSING -> READY. Records the extraction totals (both >= 0). */
+    public void complete(int totalPages, int totalChunks) {
+        if (status != DocumentStatus.PROCESSING) {
+            throw new IllegalStateException("complete is only allowed from PROCESSING, got " + status);
+        }
+        if (totalPages < 0 || totalChunks < 0) {
+            throw new IllegalArgumentException("total pages/chunks must be >= 0");
+        }
+        this.totalPages = totalPages;
+        this.totalChunks = totalChunks;
+        status = DocumentStatus.READY;
+    }
+
+    /** Any state before READY -> FAILED with the persisted reason. */
+    public void fail(String reason) {
+        if (status == DocumentStatus.READY) {
+            throw new IllegalStateException("READY cannot fail");
+        }
+        String message = reason == null || reason.isBlank() ? "unknown failure" : reason.strip();
+        errorMessage = message.length() > ERROR_MESSAGE_LIMIT
+                ? message.substring(0, ERROR_MESSAGE_LIMIT)
+                : message;
+        status = DocumentStatus.FAILED;
     }
 
     public boolean isReady() {
         return status == DocumentStatus.READY;
     }
 
-    public UUID getId() {
-        return id;
-    }
-
-    public String getFilename() {
-        return filename;
-    }
-
-    public void setFilename(String filename) {
-        this.filename = filename;
-    }
-
-    public String getContentType() {
-        return contentType;
-    }
-
-    public long getFileSize() {
-        return fileSize;
-    }
-
-    public Integer getTotalPages() {
-        return totalPages;
-    }
-
-    public void setTotalPages(Integer totalPages) {
-        this.totalPages = totalPages;
-    }
-
-    public Integer getTotalChunks() {
-        return totalChunks;
-    }
-
-    public void setTotalChunks(Integer totalChunks) {
-        this.totalChunks = totalChunks;
-    }
-
-    public DocumentStatus getStatus() {
-        return status;
-    }
-
-    public void setStatus(DocumentStatus status) {
-        this.status = status;
-    }
-
-    public Instant getCreatedAt() {
-        return createdAt;
-    }
-
-    public Instant getUpdatedAt() {
-        return updatedAt;
-    }
-
-    public String getErrorMessage() {
-        return errorMessage;
-    }
-
-    public void setErrorMessage(String errorMessage) {
-        this.errorMessage = errorMessage;
+    public boolean isFailed() {
+        return status == DocumentStatus.FAILED;
     }
 }
