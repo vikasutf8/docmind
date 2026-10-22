@@ -134,3 +134,61 @@ with zero DBs before anything is built on top of it.
   ingestion pipeline will throw it when rebuilt. No `@Data`/`@Setter` on
   the exception — immutable carrier.
 - Verification: code-only, no tests/execution per instruction.
+
+## 2026-10-21 append — document upload APIs (indexing step 1)
+
+- New `docManagement/controller/DocumentUploadController`, separate from
+  the text CRUD controller:
+  - `POST /api/v1/documents/uploads` — one file, multipart field `file`,
+    -> 202 + `DocumentMetadataResponse`
+  - `POST /api/v1/documents/uploads/batch` — many files, multipart field
+    `files`, -> 202 + `List<DocumentMetadataResponse>`
+- New `DocumentIngestionService` (+ pg-conditional impl) validates the
+  content type, inserts `document_metadata` as `PENDING`, writes the
+  binary under `app.storage.upload-dir`, then calls the optional
+  `DocumentIndexingService.index(id)` hook.
+- The RAG loader -> splitter -> embedding -> pgvector pipeline is the
+  NEXT step; until its impl exists, uploaded rows stay `PENDING` and the
+  upload API still works (`ObjectProvider` hook, no hard dependency).
+- Storage failure: row marked `FAILED` via `DocumentMetadata.fail(...)`
+  and rethrown as `DocumentProcessingException(STORAGE)` -> 500 mapping.
+- New `DocumentMetadataRepository` (+ JPA impl on the `pg` persistence
+  unit), `DocumentMetadataResponse`, `StorageProperties`; yaml gains
+  `app.storage.upload-dir` (`APP_STORAGE_UPLOAD_DIR`, default
+  `data/uploads`).
+- No retrieval/generation in this step. No tests/execution per
+  instruction.
+
+## 2026-10-21 append — service logging
+- `DocumentIngestionServiceImpl` now uses the SLF4J `Logger` interface
+  with `private static final Logger logs = LoggerFactory.getLogger(
+  DocumentIngestionServiceImpl.class)`.
+- Levels: `info` for upload/batch lifecycle, `debug` for metadata ids,
+  status and indexing-hook decisions, `warn` for rejected uploads and
+  best-effort cleanup failures, `error` for storage and metadata-persist
+  failures (with cause).
+- No custom logging wrapper — SLF4J's `Logger` is already the interface;
+  wrapping it adds indirection without value.
+
+## 2026-10-21 append — parse + ingest inside upload (indexing step 2)
+- `DocumentIngestionServiceImpl.upload` now runs the pipeline inline:
+  validate -> save metadata `PENDING` -> store file -> `startProcessing`
+  -> parse -> chunk + embed -> `complete(pages, chunks)` (`READY`).
+- New `DocumentParsingService` (PDF via `PagePdfDocumentReader`) and
+  `DocumentIngestService` (`SlidingWindowChunker` -> `VectorStore.add`).
+  The `DocumentIndexingService` placeholder hook is removed — one clear
+  flow instead of two.
+- Failures map to `DocumentProcessingException` stages: parse ->
+  `EXTRACTION`, split -> `CHUNKING`, embed -> `EMBEDDING`, store ->
+  `STORAGE`; the row is marked `FAILED` before rethrowing.
+- Chunks get deterministic ids (`documentId:chunkIndex`) + metadata
+  (`documentId`, filename, pageNumber, chunkIndex) for idempotent retries.
+- Upload is synchronous for now, so the endpoint returns **201 Created**
+  (202 + async/CDC comes later).
+- Compile-only verification; no tests/server per instruction.
+
+## 2026-10-22 append — CORS configuration
+- **Files**: `CorsProperties.java`, `CorsConfig.java` (conditional on `app.cors.enabled=true`).
+- **Dev defaults**: allowed origins for localhost:3000/5173, methods GET/POST/PUT/PATCH/DELETE/OPTIONS, headers *, exposed Location, credentials true, max-age 3600.
+- **Prod**: disabled by default; all values env-overridable via `APP_CORS_*`.
+- **Applied**: global `/**` mapping via `WebMvcConfigurer`. No service-layer changes needed.

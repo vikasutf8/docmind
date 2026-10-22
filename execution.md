@@ -152,3 +152,121 @@ SPRING_PROFILES_ACTIVE=prod ./mvnw spring-boot:run
   exist in the current tree, so this lands the contract + mapping only.
 - Follow-up when the upload pipeline is restored: throw it at the
   storage/extraction/chunking/embedding/deletion boundaries.
+
+## 2026-10-21 — document upload APIs (planned)
+- [ ] Add `DocumentUploadController` with single (`file`) and batch
+      (`files`) multipart endpoints under `/api/v1/documents/uploads`.
+- [ ] Add `DocumentIngestionService` + pg-conditional impl: validate,
+      persist PENDING metadata, store the binary, call the optional
+      indexing hook.
+- [ ] Add `DocumentMetadataRepository` + JPA impl, response DTO,
+      `StorageProperties`, and `app.storage.upload-dir` yaml.
+- [ ] Keep `DocumentProcessingException(STORAGE)` mapping for storage
+      failures; pg disabled -> 503 via the controller.
+- [ ] No tests/execution this round (per instruction).
+
+## 2026-10-21 — document upload APIs (executed, code-only)
+- Added `DocumentUploadController`:
+  `POST /api/v1/documents/uploads` (multipart `file`) and
+  `POST /api/v1/documents/uploads/batch` (multipart `files`), both 202.
+- Added `DocumentIngestionService` + pg-conditional impl: validates
+  emptiness/content type, inserts `document_metadata` as `PENDING`,
+  stores `<uuid>.pdf` under `app.storage.upload-dir`, then calls the
+  optional `DocumentIndexingService.index(id)` hook. Batch validates
+  every file before persisting the first one.
+- Added `DocumentMetadataRepository` + `JpaDocumentMetadataRepository`
+  on the `pg` persistence unit, `DocumentMetadataResponse`,
+  `StorageProperties`, and `app.storage.upload-dir`
+  (`APP_STORAGE_UPLOAD_DIR`, default `data/uploads`).
+- Storage failures mark the row `FAILED` and raise
+  `DocumentProcessingException(STORAGE)`; pg disabled -> 503 via the
+  controller's `ObjectProvider` guard.
+- Indexing impl (loader/splitter/embedding/pgvector) is the NEXT step;
+  compile verified with `./mvnw -q -DskipTests compile` (Lombok warnings
+  only). No tests/server were run, per instruction.
+
+## 2026-10-21 — DocumentIngestionService logging (executed)
+- Added `private static final Logger logs =
+  LoggerFactory.getLogger(DocumentIngestionServiceImpl.class)` and log
+  statements across upload/batch/validate/store: info lifecycle, debug
+  metadata/status/indexer decisions, warn rejects + cleanup, error
+  storage/persist failures with cause.
+- No custom logger wrapper; SLF4J `Logger` is used directly.
+- Proof: `./mvnw -q -DskipTests compile` — clean (Lombok warnings only).
+
+## 2026-10-21 — parse + ingest inside upload (planned)
+- [ ] Add `DocumentParsingService` (PDF -> `List<Document>`).
+- [ ] Add `DocumentIngestService` + `SlidingWindowChunker`
+      (pages -> chunks -> `VectorStore.add`).
+- [ ] Wire both into `DocumentIngestionServiceImpl.upload` with
+      `startProcessing` -> `complete` and stage-specific failures.
+- [ ] Remove the `DocumentIndexingService` placeholder hook.
+- [ ] Return 201 from the upload endpoints (sync indexing).
+- [ ] Compile-only verification; no tests/server.
+
+## 2026-10-22 — parse + ingest inside upload (executed, code-only)
+- Added `DocumentParsingService` + `DocumentParsingServiceImpl`:
+  `PagePdfDocumentReader(new FileSystemResource(path)).get()` returns one
+  Spring AI `Document` per PDF page; failures become
+  `DocumentProcessingException(EXTRACTION)`.
+- Added `SlidingWindowChunker` (`@Component`): character window from
+  `RagProperties.chunkSize()` with step `chunkSize - chunkOverlap`,
+  skipping blank input; no tokenizer dependency.
+- Added `DocumentIngestService` + pg-conditional
+  `DocumentIngestServiceImpl`: splits every page, builds chunks with
+  deterministic id `<documentId>:<chunkIndex>` and metadata
+  `documentId`/`filename`/`pageNumber`/`chunkIndex`, then
+  `VectorStore.add(...)`. Chunking -> `DocumentProcessingException(
+  CHUNKING)`, embedding -> `(EMBEDDING)`; missing `VectorStore` ->
+  `ProviderNotConfiguredException` -> 503.
+- Rewired `DocumentIngestionServiceImpl.upload`:
+  `PENDING -> store -> startProcessing -> parse -> ingest -> complete
+  (pages, chunks) -> READY`; every runtime failure marks the row
+  `FAILED` before rethrowing (including provider-not-configured).
+  `DocumentIndexingService` placeholder deleted.
+- `DocumentUploadController` single + batch now return **201 Created**;
+  redundant empty-file check removed (service validation already maps it
+  to 400 `BadRequestException`).
+- Proof: `./mvnw -q -DskipTests compile` — clean (Lombok Unsafe warnings
+  only). No tests/server per instruction.
+
+## 2026-10-22 — OpenAI + pgvector alignment (executed)
+- Reset DB: `DROP TABLE IF EXISTS vector_store; TRUNCATE TABLE document_metadata;`
+- `pom.xml`: swapped `spring-ai-starter-model-google-genai` -> `spring-ai-starter-model-openai` (2.0.1).
+- `application.yaml`: AI block rewritten to 2.0.1 flat keys (`openai.api-key`, `chat.model/temperature`, `embedding.model/dimensions` = `text-embedding-3-small` @ 1536). Vector store: `type: none` base, `pgvector.initialize-schema: true`, `dimensions: 1536`, `index-type: hnsw`, `distance-type: cosine-distance`, `table-name: vector_store`. Removed `organization`, empty `base-url`, dead `app.providers.pg.vector` block.
+- `application-dev.yaml`: pg enabled `${APP_PG_ENABLED:true}`, vectorstore `type: pgvector`.
+- `application-prod.yaml`: same toggles, env-overridable.
+- `DocmindApplicationTests`: `@SpringBootTest(properties = {"app.providers.pg.enabled=false", "spring.ai.vectorstore.type=none", "spring.ai.model.chat=none", "spring.ai.model.embedding=none"})`.
+- Proof: `./mvnw test` — 12/12 green; `./mvnw -q -DskipTests compile` clean.
+
+## 2026-10-22 — Document upload pipeline implemented (Phase 2 core)
+- **pom.xml**: added `spring-ai-tika-document-reader` (BOM 2.0.1).
+- **New files**:
+  - `src/main/java/.../service/DocumentMetadataService.java`
+  - `src/main/java/.../serviceImpl/DocumentMetadataServiceImpl.java`
+  - `src/main/java/.../service/DocumentParsingService.java` (updated interface: `parse(UUID, MultipartFile)`)
+  - `src/main/java/.../serviceImpl/DocumentParsingServiceImpl.java` (rewritten: PDF + Tika parsing)
+  - `src/main/java/.../service/DocumentIngestService.java` (renamed from DocumentIngestService, new signature `ingest(DocumentMetadata, List<Document>)`)
+  - `src/main/java/.../serviceImpl/DocumentIngestServiceImpl.java` (TokenTextSplitter, enrichment, vectorStore.add)
+- **Updated files**:
+  - `DocumentMetadata.java`: added `INDEXED` status, `markIndexed()`, expanded `SUPPORTED_CONTENT_TYPES`, `isReady()` covers INDEXED, `isIndexed()`.
+  - `DocumentStatus.java`: added `INDEXED` constant.
+  - `DocumentUploadController.java`: injects `DocumentMetadataService`, enhanced `@Operation`, batch per-file.
+  - `DocumentMetadataTest.java`: updated `rejectsBadUploads` for expanded content types.
+- **Deleted files**:
+  - `DocumentIngestionService.java` (old upload service)
+  - `DocumentIngestionServiceImpl.java`
+  - `SlidingWindowChunker.java` (unused after TokenTextSplitter adoption)
+- **Compile & test**: `./mvnw -q -DskipTests compile` clean; `./mvnw test` — 12/12 green.
+- **Endpoints**:
+  - `POST /api/v1/documents/uploads` (multipart `file`) → 201 CREATED, returns `DocumentMetadataResponse`
+  - `POST /api/v1/documents/uploads/batch` (multipart `files`) → 201 CREATED, list of responses
+  - Swagger UI: `http://localhost:8080/swagger-ui.html`
+
+## 2026-10-22 append — CORS configuration implemented
+- **New files**:
+  - `src/main/java/.../config/CorsProperties.java` — record binding `app.cors.*`
+  - `src/main/java/.../config/CorsConfig.java` — `WebMvcConfigurer` bean, conditional on `app.cors.enabled=true`
+- **application-dev.yaml**: CORS enabled with permissive localhost origins (3000, 5173), credentials allowed, max-age 3600s.
+- **application-prod.yaml**: CORS disabled by default (`app.cors.enabled=false`); all properties env-overridable (`APP_CORS_*`).
+- **Compile & test**: `./mvnw -q -DskipTests compile` clean; `./mvnw test` — 12/12 green.

@@ -208,3 +208,100 @@ GlobalExceptionHandler.handleDocumentProcessing
   subclasses needed.
 - The pipeline classes that would throw it are not in the current tree;
   the handler is ready for the upload/ingestion rebuild.
+
+## 2026-10-21 append — upload entry point (indexing step 1)
+```text
+POST /api/v1/documents/uploads        (file)  ─┐
+POST /api/v1/documents/uploads/batch  (files) ─┴─> DocumentUploadController
+  -> DocumentIngestionService (pg enabled only)
+     -> validate non-empty + SUPPORTED_CONTENT_TYPES
+     -> INSERT document_metadata (PENDING)
+     -> write <uuid>.pdf under app.storage.upload-dir
+     -> DocumentIndexingService.index(id)   [optional hook, next step]
+     -> 202 DocumentMetadataResponse
+  storage failure -> metadata.fail(...) -> DocumentProcessingException(STORAGE)
+  pg disabled     -> ProviderNotConfiguredException -> 503
+```
+- Separate controller from `DocumentController` so multipart/upload
+  concerns do not leak into the text CRUD surface.
+- Batch is sequential single uploads; every file is validated before the
+  first one is persisted, so a bad entry rejects the request before any
+  row/file is created.
+- `DocumentIndexingService` has no implementation yet. It is resolved via
+  `ObjectProvider`, so the upload API is complete and usable now; the
+  loader/splitter/embedding/pgvector impl plugs into the same hook.
+- `DocumentMetadataRepository` is interface-first + a JPA impl on the
+  existing `pg` persistence unit (`@Transactional("pgTransactionManager")`),
+  keeping the no-`@Primary` DataSource rule.
+- `app.storage.upload-dir` is bound in base yaml (default `data/uploads`)
+  because `StorageProperties` is always scanned; override with
+  `APP_STORAGE_UPLOAD_DIR` per environment.
+
+## 2026-10-21 append — logging convention
+- Each service owns one `private static final Logger logs` obtained via
+  `LoggerFactory.getLogger(<ServiceImpl>.class)`; no logging abstraction
+  of our own.
+- `info` = accepted work (upload/batch start+finish), `debug` =
+  ids/status/indexing decisions, `warn` = client rejects + cleanup
+  problems, `error` = storage/persistence failures with the cause.
+- Exception messages returned to clients stay unchanged; the logger is
+  the only place stack traces/details are emitted.
+
+## 2026-10-21 append — upload -> parse -> ingest (sync)
+```text
+DocumentUploadController
+  -> DocumentIngestionService.upload(file)
+     validate contentType/size
+     save DocumentMetadata (PENDING)
+     store <uuid>.pdf
+     metadata.startProcessing() + save (PROCESSING)
+     DocumentParsingService.parse(id, path)          PDF -> List<Document> pages
+     DocumentIngestService.ingest(pages, metadata)   pages -> chunks -> VectorStore
+     metadata.complete(pages, chunks) + save (READY)
+     -> 201 DocumentMetadataResponse
+  failure -> metadata.fail(reason) + DocumentProcessingException
+             (EXTRACTION | CHUNKING | EMBEDDING | STORAGE)
+```
+- `DocumentParsingServiceImpl` owns PDF extraction only; adding doc/docx
+  later means another loader behind the same interface.
+- `DocumentIngestServiceImpl` chunks each page with the RAG
+  (`app.rag.chunk-size` / `chunk-overlap`) sliding window, stamps
+  `documentId`/`filename`/`pageNumber`/`chunkIndex`, and writes to the
+  pgvector `VectorStore` (`ObjectProvider`, 503 if not configured).
+- Deterministic chunk ids (`<documentId>:<chunkIndex>`) keep retries from
+  duplicating vectors.
+- The upload request performs indexing synchronously; move to 202 +
+  background worker when CDC/async ingestion lands.
+
+## 2026-10-22 append — OpenAI + pgvector alignment
+- Google GenAI starter removed; OpenAI starter (`spring-ai-starter-model-openai` 2.0.1) is now the sole AI provider.
+- AI config migrated to Spring AI 2.0.1 flat property style (no `options.*` nesting):
+  - `spring.ai.openai.api-key`, `chat.model`, `chat.temperature`, `embedding.model`, `embedding.dimensions`.
+  - `spring.ai.vectorstore.type` toggles pgvector autoconfig (`none` base, `pgvector` dev/prod).
+  - `pgvector.initialize-schema: true`, `dimensions: 1536`, `index-type: hnsw`, `distance-type: cosine-distance`.
+- Dead config removed: `app.providers.pg.vector.*` yaml block (was never read by Spring AI pgvector autoconfig).
+- Provider toggles: base `type: none` + pg disabled; dev/prod `type: pgvector` + pg enabled (`${APP_PG_ENABLED:true}`). Keeps the "zero-DB boot" invariant for tests and CI.
+- Only pg is enabled; MySQL/Mongo/Cassandra remain disabled scaffolding.
+
+## 2026-10-22 append — Document upload pipeline (Phase 2 core)
+- **Three-layer service architecture**:
+  1. `DocumentMetadataService` — upload orchestration: save metadata (PENDING), call parsing, call ingestion, return response (201).
+  2. `DocumentParsingService` — `parse(UUID, MultipartFile)`:
+     - PDF: `PagePdfDocumentReader(resource, PdfDocumentReaderConfig.defaultConfig())` → one document per page.
+     - Generic (Word, text, etc.): `TikaDocumentReader(resource).read()`.
+     - Uses `ByteArrayResource` with overridden `getFilename()` for metadata.
+  3. `DocumentIngestService` — chunking + embedding + status:
+     - `TokenTextSplitter` (1000 tokens, 400 min chars, 10 min embed, 5000 max chunks, keepSeparator=true).
+     - Enrichment per chunk: `documentId`, `fileName`, `contentType`, `chunkIndex`, `page_number` (from `PagePdfDocumentReader.METADATA_START_PAGE_NUMBER` or default 1).
+     - `VectorStore.add(enrichedChunks)`.
+     - Status: `startProcessing()` → `PROCESSING`; empty chunks → `FAILED`; success → `markIndexed(pages, chunks)` → `INDEXED` (terminal).
+- **Entity updates**: `DocumentStatus` adds `INDEXED`; `SUPPORTED_CONTENT_TYPES` expanded; `markIndexed()` method; `isReady()` covers READY+INDEXED.
+- **Controller**: `POST /api/v1/documents/uploads` (single), `POST /api/v1/documents/uploads/batch` (per-file loop), both 201 CREATED; Swagger `@Operation` enriched.
+- **Removed**: `DocumentIngestionService` (old upload orchestrator), `SlidingWindowChunker` (replaced by TokenTextSplitter).
+- **Dependencies**: added `spring-ai-tika-document-reader` (BOM 2.0.1).
+
+## 2026-10-22 append — CORS configuration
+- **Package**: `config/CorsProperties.java` (record, `@ConfigurationProperties("app.cors")`) + `config/CorsConfig.java` (conditional `WebMvcConfigurer`).
+- **Dev defaults**: `allowedOrigins` = localhost:3000/5173, `allowedMethods` = GET/POST/PUT/PATCH/DELETE/OPTIONS, `allowedHeaders` = *, `exposedHeaders` = Location, `allowCredentials` = true, `maxAge` = 3600s.
+- **Prod**: disabled by default (`app.cors.enabled=false`); all properties env-overridable via `APP_CORS_*`.
+- **Scope**: applied globally to `/**` via Spring MVC `CorsRegistry`. Web-layer only — no service or repository changes.

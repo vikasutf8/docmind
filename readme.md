@@ -43,6 +43,19 @@ SPRING_PROFILES_ACTIVE=prod ./mvnw spring-boot:run
 - OpenAPI JSON: http://localhost:8080/v3/api-docs
 - Health: http://localhost:8080/actuator/health
 
+### Documented endpoints (Swagger)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/documents` | Create document |
+| GET | `/api/v1/documents` | List all documents |
+| GET | `/api/v1/documents/{id}` | Get document by ID |
+| PUT | `/api/v1/documents/{id}` | Update document |
+| DELETE | `/api/v1/documents/{id}` | Delete document |
+| POST | `/api/v1/documents/uploads` | Upload single PDF (multipart `file`) |
+| POST | `/api/v1/documents/uploads/batch` | Upload multiple PDFs (multipart `files`) |
+| POST | `/api/v1/chat` | Dummy echo chat (`{"message": "..."}`) |
+
 ## Env profiles
 
 | File                    | When                       |
@@ -117,3 +130,118 @@ curl -X POST localhost:8080/api/v1/chat \
   **500**, with `documentId` + `stage` properties.
 - The cause is logged server-side and never serialized. The upload
   pipeline will throw it at each stage boundary when rebuilt.
+
+## 2026-10-21 append — document upload APIs
+- `POST /api/v1/documents/uploads` — one file, multipart field `file`:
+```bash
+curl -X POST localhost:8080/api/v1/documents/uploads \
+  -F 'file=@paper.pdf'
+```
+- `POST /api/v1/documents/uploads/batch` — many files, multipart field
+  `files`:
+```bash
+curl -X POST localhost:8080/api/v1/documents/uploads/batch \
+  -F 'files=@a.pdf' -F 'files=@b.pdf'
+```
+- Both return **202** with `DocumentMetadataResponse` (status `PENDING`);
+  files are stored under `app.storage.upload-dir`
+  (`APP_STORAGE_UPLOAD_DIR`, default `data/uploads`).
+- The RAG indexing pipeline (loader -> splitter -> embedding -> pgvector)
+  plugs into the `DocumentIndexingService` hook next; until then uploads
+  stay `PENDING`. pg disabled -> 503.
+- `DocumentProcessingException(STORAGE)` is raised if the file cannot be
+  written and the metadata row is marked `FAILED`.
+
+## 2026-10-21 append — upload logging
+- `DocumentIngestionServiceImpl` uses SLF4J directly:
+  `private static final Logger logs = LoggerFactory.getLogger(
+  DocumentIngestionServiceImpl.class)`, with `info` lifecycle logs,
+  `debug` metadata/indexing detail, `warn` rejects/cleanup and `error`
+  storage/persist failures.
+
+## 2026-10-22 append — uploads now parse, chunk and embed
+- Both upload endpoints now index synchronously and return **201**
+  (supersedes the earlier 202): validate -> `PENDING` row -> store file
+  -> `PROCESSING` -> PDF parse -> sliding-window chunk -> embed into
+  pgvector -> `READY` with `totalPages` + `totalChunks`.
+- Requires `app.providers.pg.enabled=true` plus a configured embedding
+  model/`VectorStore`; without a `VectorStore` the request fails with
+  503 and the row is marked `FAILED`.
+- Chunks carry deterministic ids (`<documentId>:<chunkIndex>`) and
+  metadata (`documentId`, `filename`, `pageNumber`, `chunkIndex`), so a
+  retried document does not duplicate vectors.
+- Failure mapping: parse -> 422 `EXTRACTION`, split -> 422 `CHUNKING`,
+  embed -> 500 `EMBEDDING`, file write -> 500 `STORAGE`. The metadata
+  row stores the reason (`errorMessage`) and can be retried.
+- Batch uploads are sequential; earlier files stay indexed if a later
+  file fails.
+- Tuning: `RAG_CHUNK_SIZE` (500) and `RAG_CHUNK_OVERLAP` (100).
+
+## 2026-10-22 append — OpenAI + pgvector alignment
+- **AI provider**: OpenAI (`text-embedding-3-small` @ 1536 dims for RAG, `gpt-4o-mini` for chat). Google GenAI starter removed.
+- **Config**: Spring AI 2.0.1 flat keys in `application.yaml`:
+  ```yaml
+  spring.ai.openai.api-key: ${OPENAI_API_KEY:}
+  spring.ai.openai.chat.model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+  spring.ai.openai.embedding.model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+  spring.ai.openai.embedding.dimensions: ${OPENAI_EMBEDDING_DIMENSIONS:1536}
+  spring.ai.vectorstore.type: ${VECTOR_STORE_TYPE:none}
+  spring.ai.vectorstore.pgvector.initialize-schema: true
+  spring.ai.vectorstore.pgvector.dimensions: 1536
+  spring.ai.vectorstore.pgvector.index-type: hnsw
+  spring.ai.vectorstore.pgvector.distance-type: cosine-distance
+  ```
+- **Providers**: only PostgreSQL+pgvector active (via Docker Compose). `application-dev.yaml` enables pg by default (`APP_PG_ENABLED:true`); `application-prod.yaml` env-overridable. Base yaml keeps everything dormant so tests/CI boot without DB or keys.
+- **DB reset**: dropped old `vector_store` (Google 768-dim) and truncated `document_metadata` — fresh baseline for OpenAI 1536-dim vectors.
+- **Tests**: all 12 pass (`./mvnw test`), context test overrides pg/AI to run offline.
+
+### Run (dev)
+```bash
+docker compose up -d postgres
+export OPENAI_API_KEY=sk-...   # from platform.openai.com
+./mvnw spring-boot:run
+```
+- Dev profile (default) — pg enabled, vectorstore pgvector, Swagger on.
+- Swagger: http://localhost:8080/swagger-ui.html
+- Health: http://localhost:8080/actuator/health
+
+### Verify upload
+```bash
+curl -X POST localhost:8080/api/v1/documents/uploads \
+  -F 'file=@/path/paper.pdf'
+```
+Returns **201** with `READY` + `totalPages`/`totalChunks`.
+
+### Verify DB
+```bash
+docker exec docmind-postgres psql -U docmind -d docmind \
+  -c "select status,total_pages,total_chunks from document_metadata;"
+docker exec docmind-postgres psql -U docmind -d docmind \
+  -c "select count(*), vector_dims(embedding) from vector_store group by 2;"
+```
+Expect: `vector_dims = 1536`, rows > 0 after upload.
+
+### Notes
+- Never commit `OPENAI_API_KEY`; use shell/IDE env (add `.env` to `.gitignore` if needed).
+- Only pg enabled — MySQL/Mongo/Cassandra stay disabled. Enabling MySQL later would need a qualified `VectorStore` config to avoid `JdbcTemplate` ambiguity.
+
+## 2026-10-22 append — Upload pipeline: TokenTextSplitter + Tika + INDEXED status
+- **Pipeline refactor**: three services (`DocumentMetadataService`, `DocumentParsingService`, `DocumentIngestService`) replacing the old monolithic `DocumentIngestionService`.
+- **Parsing**: PDF → `PagePdfDocumentReader` (one document per page, preserves `page_number` metadata); non-PDF → `TikaDocumentReader` (Word, text, etc.). Added `spring-ai-tika-document-reader` dependency.
+- **Chunking**: `TokenTextSplitter` (1000 tokens, min 400 chars, min embed length 10, max 5000 chunks, keep separator) — replaces `SlidingWindowChunker`. Deterministic chunk IDs (`<documentId>:<chunkIndex>`).
+- **Metadata enrichment** per chunk: `documentId`, `fileName`, `contentType`, `chunkIndex`, `page_number`.
+- **Vector store**: `VectorStore.add(enrichedChunks)` writes embeddings to pgvector.
+- **Status flow**: `PENDING` → `startProcessing()` → `PROCESSING` → success → `markIndexed(pages, chunks)` → `INDEXED` (terminal); failure → `FAILED` with `errorMessage` (retryable). `READY` retained for legacy but `INDEXED` is the new success state. `isReady()` returns true for both.
+- **Supported formats**: `application/pdf`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/plain`, `application/octet-stream` (Tika fallback).
+- **Upload endpoints** return **201 CREATED** with full `DocumentMetadataResponse`:
+  - `POST /api/v1/documents/uploads` — single file (`file`)
+  - `POST /api/v1/documents/uploads/batch` — multiple files (`files`)
+- **Batch**: sequential per-file; earlier files stay indexed if a later file fails.
+- **Test**: all 12 pass; `DocumentMetadataTest` updated for expanded content types.
+
+## 2026-10-22 append — CORS configuration
+- **New**: `CorsProperties` (`app.cors.*`) + `CorsConfig` (`WebMvcConfigurer`) in `config/`.
+- **Dev profile** (`application-dev.yaml`): CORS enabled by default with permissive origins for local frontends (localhost:3000, localhost:5173, 127.0.0.1:3000, 127.0.0.1:5173), credentials allowed, max-age 1h.
+- **Prod profile** (`application-prod.yaml`): CORS disabled by default (`app.cors.enabled=false`); all properties env-overridable (`APP_CORS_*`).
+- **Properties**: `allowed-origins`, `allowed-methods`, `allowed-headers`, `exposed-headers`, `allow-credentials`, `max-age`.
+- **Usage**: Applied globally to `/**` via Spring MVC `CorsRegistry`. No code changes needed in services (CORS is a web-layer concern).

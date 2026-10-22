@@ -3,6 +3,22 @@ spring:
   docker:
     compose:
       enabled: false
+  ai:
+    vectorstore:
+      type: ${VECTOR_STORE_TYPE:pgvector}
+
+app:
+  providers:
+    pg:
+      enabled: ${APP_PG_ENABLED:true}
+  cors:
+    enabled: ${APP_CORS_ENABLED:false}
+    allowed-origins: ${APP_CORS_ORIGINS:}
+    allowed-methods: ${APP_CORS_METHODS:GET,POST,PUT,PATCH,DELETE,OPTIONS}
+    allowed-headers: ${APP_CORS_HEADERS:*}
+    exposed-headers: ${APP_CORS_EXPOSED_HEADERS:}
+    allow-credentials: ${APP_CORS_ALLOW_CREDENTIALS:false}
+    max-age: ${APP_CORS_MAX_AGE:3600}
 
 springdoc:
   api-docs:

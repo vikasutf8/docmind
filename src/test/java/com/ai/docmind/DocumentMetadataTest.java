@@ -26,7 +26,7 @@ class DocumentMetadataTest {
     void rejectsBadUploads() {
         assertThatThrownBy(() -> DocumentMetadata.newUpload(" ", "application/pdf", 10))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> DocumentMetadata.newUpload("a.pdf", "application/msword", 10))
+        assertThatThrownBy(() -> DocumentMetadata.newUpload("a.pdf", "application/x-unsupported", 10))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> DocumentMetadata.newUpload("a.pdf", "application/pdf", -1))
                 .isInstanceOf(IllegalArgumentException.class);

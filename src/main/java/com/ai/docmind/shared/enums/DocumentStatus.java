@@ -16,6 +16,9 @@ public enum DocumentStatus {
     /** All chunks embedded and searchable. Terminal success state. */
     READY,
 
+    /** Document indexed and ready for querying. Terminal success state. */
+    INDEXED,
+
     /** Pipeline failed; see {@code DocumentMetadata.errorMessage}. Retryable. */
     FAILED
 }

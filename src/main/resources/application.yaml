@@ -1,4 +1,4 @@
-spring:
+::spring:
   application:
     name: docmind
   profiles:
@@ -22,25 +22,24 @@ spring:
   docker:
     compose:
       enabled: false
-  # Spring AI (dormant until Phase 1 starter). Empty secret defaults so the
-  # app boots without env vars; set real values via environment, not git.
+  # Spring AI — OpenAI for chat + embedding; pgvector for vector store
   ai:
     openai:
       api-key: ${OPENAI_API_KEY:}
-      organization: ${OPENAI_ORGANIZATION:}
-      base-url: ${OPENAI_BASE_URL:}
       chat:
-        options:
-          model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
-          temperature: ${OPENAI_CHAT_TEMPERATURE:1.0}
+        model: ${OPENAI_CHAT_MODEL:gpt-4o-mini}
+        temperature: ${OPENAI_CHAT_TEMPERATURE:1.0}
       embedding:
-        options:
-          model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-large}
-          dimensions: ${OPENAI_EMBEDDING_DIMENSIONS:3072}
+        model: ${OPENAI_EMBEDDING_MODEL:text-embedding-3-small}
+        dimensions: ${OPENAI_EMBEDDING_DIMENSIONS:1536}
     vectorstore:
+      type: ${VECTOR_STORE_TYPE:none}
       pgvector:
-        index-type: ${VECTORSTORE_PGVECTOR_INDEX_TYPE:ivfflat}
-        distance-type: ${VECTORSTORE_PGVECTOR_DISTANCE_TYPE:cosine}
+        initialize-schema: true
+        dimensions: ${OPENAI_EMBEDDING_DIMENSIONS:1536}
+        index-type: hnsw
+        distance-type: cosine-distance
+        table-name: vector_store
 
 
 app:
@@ -52,6 +51,8 @@ app:
     chunk-overlap: ${RAG_CHUNK_OVERLAP:100}
     top-k: ${RAG_TOP_K:5}
     similarity-threshold: ${RAG_SIMILARITY_THRESHOLD:0.7}
+  storage:
+    upload-dir: ${APP_STORAGE_UPLOAD_DIR:data/uploads}
   providers:
     mysql:
       enabled: false
@@ -69,10 +70,6 @@ app:
       driver-class-name: org.postgresql.Driver
       maximum-pool-size: 15
       minimum-idle: 2
-      vector:
-        table-name: vector_store
-        dimensions: 1536
-        initialize-schema: true
     mongo:
       enabled: false
       connection-string: mongodb://localhost:27017/docmind

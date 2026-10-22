@@ -18,20 +18,20 @@ import org.hibernate.annotations.DynamicUpdate;
 import org.hibernate.annotations.UpdateTimestamp;
 
 /**
- * Postgres-backed metadata for one uploaded file, table
- * {@code document_metadata}. Metadata only — the binary lives on disk or
- * object storage, never in the row.
- *
- * <p>The lifecycle is encapsulated. {@code newUpload()} starts
- * {@code PENDING}; {@link #startProcessing()} moves to {@code PROCESSING};
- * the run ends in {@link #complete(int, int)} ({@code READY}, terminal) or
- * {@link #fail(String)} ({@code FAILED}, retryable). There are no public
- * setters, so callers cannot produce illegal transitions.
- *
- * <p>Supported today: {@code application/pdf}. {@code .doc}/{@code .docx}
- * join {@link #SUPPORTED_CONTENT_TYPES} with a parser later — no schema
- * change needed.
- */
+  * Postgres-backed metadata for one uploaded file, table
+  * {@code document_metadata}. Metadata only — the binary lives on disk or
+  * object storage, never in the row.
+  *
+  * <p>The lifecycle is encapsulated. {@code newUpload()} starts
+  * {@code PENDING}; {@link #startProcessing()} moves to {@code PROCESSING};
+  * the run ends in {@link #complete(int, int)} ({@code READY}, terminal),
+  * {@link #markIndexed(int, int)} ({@code INDEXED}, terminal) or
+  * {@link #fail(String)} ({@code FAILED}, retryable). There are no public
+  * setters, so callers cannot produce illegal transitions.
+  *
+  * <p>Supported content types include PDF, Word, text, and other formats
+  * parseable by Apache Tika.
+  */
 @Entity
 @Table(name = "document_metadata")
 @DynamicUpdate
@@ -40,7 +40,13 @@ import org.hibernate.annotations.UpdateTimestamp;
 public class DocumentMetadata {
 
     /** Content types accepted by the upload path. */
-    public static final Set<String> SUPPORTED_CONTENT_TYPES = Set.of("application/pdf");
+    public static final Set<String> SUPPORTED_CONTENT_TYPES = Set.of(
+            "application/pdf",
+            "application/msword",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            "text/plain",
+            "application/octet-stream"
+    );
 
     private static final int ERROR_MESSAGE_LIMIT = 2000;
 
@@ -137,10 +143,24 @@ public class DocumentMetadata {
         status = DocumentStatus.READY;
     }
 
-    /** Any state before READY -> FAILED with the persisted reason. */
+    /** PROCESSING -> INDEXED. Records the ingestion totals (both >= 0). Clears error message. */
+    public void markIndexed(int totalPages, int totalChunks) {
+        if (status != DocumentStatus.PROCESSING) {
+            throw new IllegalStateException("markIndexed is only allowed from PROCESSING, got " + status);
+        }
+        if (totalPages < 0 || totalChunks < 0) {
+            throw new IllegalArgumentException("total pages/chunks must be >= 0");
+        }
+        this.totalPages = totalPages;
+        this.totalChunks = totalChunks;
+        this.errorMessage = null;
+        status = DocumentStatus.INDEXED;
+    }
+
+    /** Any state before READY/INDEXED -> FAILED with the persisted reason. */
     public void fail(String reason) {
-        if (status == DocumentStatus.READY) {
-            throw new IllegalStateException("READY cannot fail");
+        if (status == DocumentStatus.READY || status == DocumentStatus.INDEXED) {
+            throw new IllegalStateException("READY/INDEXED cannot fail");
         }
         String message = reason == null || reason.isBlank() ? "unknown failure" : reason.strip();
         errorMessage = message.length() > ERROR_MESSAGE_LIMIT
@@ -150,7 +170,11 @@ public class DocumentMetadata {
     }
 
     public boolean isReady() {
-        return status == DocumentStatus.READY;
+        return status == DocumentStatus.READY || status == DocumentStatus.INDEXED;
+    }
+
+    public boolean isIndexed() {
+        return status == DocumentStatus.INDEXED;
     }
 
     public boolean isFailed() {

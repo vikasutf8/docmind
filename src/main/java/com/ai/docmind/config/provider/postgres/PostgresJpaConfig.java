@@ -8,6 +8,7 @@ import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
 import org.springframework.orm.jpa.JpaTransactionManager;
 import org.springframework.orm.jpa.LocalContainerEntityManagerFactoryBean;
 import org.springframework.orm.jpa.vendor.HibernateJpaVendorAdapter;
@@ -30,8 +31,9 @@ import org.springframework.transaction.annotation.EnableTransactionManagement;
 @ConditionalOnProperty(prefix = "app.providers.pg", name = "enabled", havingValue = "true")
 public class PostgresJpaConfig {
 
-    @Bean("pgEntityManagerFactory")
-    LocalContainerEntityManagerFactoryBean pgEntityManagerFactory(
+    @Bean
+    @Primary
+    LocalContainerEntityManagerFactoryBean entityManagerFactory(
             @Qualifier("postgresDataSource") DataSource ds) {
         var emf = new LocalContainerEntityManagerFactoryBean();
         emf.setDataSource(ds);
@@ -39,7 +41,6 @@ public class PostgresJpaConfig {
         emf.setPersistenceUnitName("pg");
         emf.setJpaVendorAdapter(new HibernateJpaVendorAdapter());
         Map<String, Object> props = new HashMap<>();
-        props.put("hibernate.dialect", "org.hibernate.dialect.PostgreSQLDialect");
         props.put("hibernate.hbm2ddl.auto", "update");
         props.put("hibernate.physical_naming_strategy",
                 "org.hibernate.boot.model.naming.CamelCaseToUnderscoresNamingStrategy");
@@ -47,9 +48,9 @@ public class PostgresJpaConfig {
         return emf;
     }
 
-    @Bean("pgTransactionManager")
-    PlatformTransactionManager pgTransactionManager(
-            @Qualifier("pgEntityManagerFactory") EntityManagerFactory emf) {
+    @Bean
+    @Primary
+    PlatformTransactionManager transactionManager(EntityManagerFactory emf) {
         return new JpaTransactionManager(emf);
     }
 }
