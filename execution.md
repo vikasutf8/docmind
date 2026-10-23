@@ -270,3 +270,18 @@ SPRING_PROFILES_ACTIVE=prod ./mvnw spring-boot:run
 - **application-dev.yaml**: CORS enabled with permissive localhost origins (3000, 5173), credentials allowed, max-age 3600s.
 - **application-prod.yaml**: CORS disabled by default (`app.cors.enabled=false`); all properties env-overridable (`APP_CORS_*`).
 - **Compile & test**: `./mvnw -q -DskipTests compile` clean; `./mvnw test` — 12/12 green.
+
+## 2026-10-23 append — Phase 2: RAG retrieval & generation (chat package)
+- **New DTOs** (`chat/dtos/`):
+  - `SearchRequestDto.java`, `SearchResultDto.java`, `CitationDto.java`
+  - `ChatRequestDto.java`, `ChatResponseDto.java`
+- **New service** (`chat/service/`, `chat/serviceImpl/`):
+  - `RagService.java` (interface)
+  - `RagServiceImpl.java` — VectorStore retrieval, ChatClient generation, MessageWindowChatMemory
+- **Updated controller** (`chat/controller/ChatController.java`):
+  - `POST /api/v1/chat/search` → `SearchResultDto`
+  - `POST /api/v1/chat/ask` → `ChatResponseDto`
+  - `GET /api/v1/chat/stream` (SSE) → `Flux<String>`
+  - Guarded by `ObjectProvider<RagService>` (503 if pg disabled)
+- **Dependencies**: `spring-ai-model`, `spring-ai-client-chat`, `spring-ai-vector-store` (via BOM 2.0.1)
+- **Compile & test**: `./mvnw -q -DskipTests compile` clean; `./mvnw test` — 12/12 green.

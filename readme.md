@@ -245,3 +245,36 @@ Expect: `vector_dims = 1536`, rows > 0 after upload.
 - **Prod profile** (`application-prod.yaml`): CORS disabled by default (`app.cors.enabled=false`); all properties env-overridable (`APP_CORS_*`).
 - **Properties**: `allowed-origins`, `allowed-methods`, `allowed-headers`, `exposed-headers`, `allow-credentials`, `max-age`.
 - **Usage**: Applied globally to `/**` via Spring MVC `CorsRegistry`. No code changes needed in services (CORS is a web-layer concern).
+
+## 2026-10-23 append — Phase 2: RAG retrieval & generation (chat package)
+- **New DTOs** (`chat/dtos/`): `SearchRequestDto`, `SearchResultDto`, `CitationDto`, `ChatRequestDto`, `ChatResponseDto`
+- **RagService** (`chat/service/`): `searchSimilarChunks`, `askQuestion`, `streamQuestionAnswer`
+- **RagServiceImpl** (`chat/serviceImpl/`):
+  - VectorStore similarity search with `FilterExpressionBuilder` for documentId filter
+  - ChatClient with `MessageWindowChatMemory` + `InMemoryChatMemoryRepository` for conversation context
+  - Citation mapping: `documentId`, `fileName`, `chunkIndex`, `page_number`, similarity = 1 - distance
+  - Context builder: `[Source: filename (page N)]\ntext` joined with `---`
+  - Prompt template: conditional (no-context / with-context) with grounding instructions
+- **ChatController** (`chat/controller/`):
+  - `POST /api/v1/chat/search` — similarity search, returns `SearchResultDto` (query, totalMatches, citations[])
+  - `POST /api/v1/chat/ask` — RAG Q&A, returns `ChatResponseDto` (answer, conversationId, citations[], responseTimeMs)
+  - `GET /api/v1/chat/stream` — SSE streaming, query params: `question`, `documentId`, `topK`, `minSimilarity`, `conversationId`
+  - All endpoints return 503 if PostgreSQL provider disabled
+- **Usage examples**:
+```bash
+# Search similar chunks
+curl -X POST localhost:8080/api/v1/chat/search \
+  -H 'Content-Type: application/json' \
+  -d '{"query":"machine learning", "topK":5, "minSimilarity":0.7}'
+
+# Ask a question (RAG)
+curl -X POST localhost:8080/api/v1/chat/ask \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"What is RAG?", "topK":5, "minSimilarity":0.7}'
+
+# Stream answer (SSE)
+curl -N localhost:8080/api/v1/chat/stream?question=What%20is%20RAG%3F
+```
+- **Tuning**: `app.rag.topK` (default 5), `app.rag.similarity-threshold` (default 0.7)
+- **Dependencies**: `spring-ai-model` (ChatMemory), `spring-ai-client-chat` (ChatClient), `spring-ai-vector-store` (SearchRequest)
+- **Proof**: `./mvnw test` — 12/12 green; compile clean.

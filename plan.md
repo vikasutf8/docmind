@@ -192,3 +192,28 @@ with zero DBs before anything is built on top of it.
 - **Dev defaults**: allowed origins for localhost:3000/5173, methods GET/POST/PUT/PATCH/DELETE/OPTIONS, headers *, exposed Location, credentials true, max-age 3600.
 - **Prod**: disabled by default; all values env-overridable via `APP_CORS_*`.
 - **Applied**: global `/**` mapping via `WebMvcConfigurer`. No service-layer changes needed.
+
+## 2026-10-23 append — Phase 2: RAG retrieval & generation (chat package)
+- **New DTOs** (`chat/dtos/`):
+  - `SearchRequestDto(query, documentId, topK, minSimilarity)`
+  - `SearchResultDto(query, totalMatches, List<CitationDto>)`
+  - `CitationDto(documentId, fileName, chunkIndex, pageNumber, snippet, similarityScore, metadata)`
+  - `ChatRequestDto(question, documentId, topK, minSimilarity, conversationId)`
+  - `ChatResponseDto(answer, conversationId, List<CitationDto>, responseTimeMs)`
+- **RagService interface** (`chat/service/`): `searchSimilarChunks`, `askQuestion`, `streamQuestionAnswer`
+- **RagServiceImpl** (`chat/serviceImpl/`):
+  - Uses `VectorStore` + `ChatClient.Builder` + `RagProperties`
+  - `MessageWindowChatMemory` + `InMemoryChatMemoryRepository` for conversation memory
+  - `retrieveRelevantDocuments`: `FilterExpressionBuilder` for documentId filter, `SearchRequest.builder().similarityThreshold().topK()`, `vectorStore.similaritySearch()`
+  - `mapToCitation`: extracts `documentId`, `fileName`, `chunkIndex`, `page_number` from metadata; score = 1 - distance
+  - `buildContextString`: formats `[Source: filename (page N)]\ntext`
+  - `buildPrompt`: conditional (no context / with context) with instructions for grounded answers
+  - `askQuestion`: retrieves → builds context+prompt → `chatClient.prompt().user().call().content()` → wraps in `ChatResponseDto`
+  - `streamQuestionAnswer`: same retrieval, streams via `chatClient.prompt().user().stream().content()`
+- **ChatController** (`chat/controller/`):
+  - `POST /api/v1/chat/search` — similarity search, returns `SearchResultDto`
+  - `POST /api/v1/chat/ask` — RAG Q&A, returns `ChatResponseDto`
+  - `GET /api/v1/chat/stream` — SSE streaming, query params for question/documentId/topK/minSimilarity/conversationId
+  - All gated by `ObjectProvider<RagService>` → 503 if pg disabled
+- **Dependencies**: Spring AI `spring-ai-model` (ChatMemory), `spring-ai-client-chat` (ChatClient, MessageChatMemoryAdvisor), `spring-ai-vector-store` (VectorStore, SearchRequest)
+- **Proof**: `./mvnw test` — 12/12 green; compile clean.

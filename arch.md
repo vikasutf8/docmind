@@ -305,3 +305,30 @@ DocumentUploadController
 - **Dev defaults**: `allowedOrigins` = localhost:3000/5173, `allowedMethods` = GET/POST/PUT/PATCH/DELETE/OPTIONS, `allowedHeaders` = *, `exposedHeaders` = Location, `allowCredentials` = true, `maxAge` = 3600s.
 - **Prod**: disabled by default (`app.cors.enabled=false`); all properties env-overridable via `APP_CORS_*`.
 - **Scope**: applied globally to `/**` via Spring MVC `CorsRegistry`. Web-layer only — no service or repository changes.
+
+## 2026-10-23 append — Phase 2: RAG retrieval & generation (chat package)
+- **Package layout**: `chat/{controller,service,serviceImpl,dtos}` (mirrors `docManagement`)
+- **DTOs**:
+  - `SearchRequestDto/ResultDto` — search query, filters, pagination, citations
+  - `CitationDto` — documentId, fileName, chunkIndex, pageNumber, snippet, similarityScore, raw metadata
+  - `ChatRequestDto/ResponseDto` — question + filters, answer + citations + timing
+- **RagService** (`chat/service/`): 3 methods
+  - `searchSimilarChunks(SearchRequestDto)` → `SearchResultDto`
+  - `askQuestion(ChatRequestDto)` → `ChatResponseDto` (blocking)
+  - `streamQuestionAnswer(ChatRequestDto)` → `Flux<String>` (SSE)
+- **RagServiceImpl** (`chat/serviceImpl/`):
+  - Injected: `ObjectProvider<VectorStore>`, `ChatClient.Builder`, `RagProperties`
+  - Memory: `MessageWindowChatMemory(InMemoryChatMemoryRepository)` via `MessageChatMemoryAdvisor`
+  - Retrieval: `FilterExpressionBuilder.eq("documentId", id).build()` → `SearchRequest.builder().query().topK().similarityThreshold().filterExpression()` → `vectorStore.similaritySearch()`
+  - Citation mapping: metadata keys `documentId`, `fileName`, `chunkIndex`, `page_number`, `score` (distance) → similarity = `1 - distance`
+  - Context: `[Source: filename (page N)]\nchunkText` joined with `---`
+  - Prompt: conditional template (no-context vs with-context) with grounding instructions
+  - Answer: `chatClient.prompt().user(prompt).call().content()`
+  - Stream: `chatClient.prompt().user(prompt).stream().content()`
+- **ChatController** (`chat/controller/`):
+  - `POST /api/v1/chat/search` — `SearchRequestDto` → `SearchResultDto`
+  - `POST /api/v1/chat/ask` — `ChatRequestDto` → `ChatResponseDto`
+  - `GET /api/v1/chat/stream` — query params, `Flux<String>` SSE
+  - All guarded by `ObjectProvider<RagService>` → 503 if pg disabled
+- **Dependencies**: `spring-ai-model` (ChatMemory), `spring-ai-client-chat` (ChatClient, MessageChatMemoryAdvisor), `spring-ai-vector-store` (VectorStore, SearchRequest)
+- **Config**: `app.rag.topK` / `similarityThreshold` used as defaults
